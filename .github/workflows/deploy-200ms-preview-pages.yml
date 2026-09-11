@@ -1,10 +1,10 @@
-name: Deploy 200ms Vibenet preview
+name: Deploy 200ms demo preview
 
 on:
   push:
     branches: [master]
     paths:
-      - "200ms-vibenet/**"
+      - "200ms-demo/**"
       - ".github/workflows/deploy-200ms-preview-pages.yml"
   workflow_dispatch:
 
@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: 200ms-vibenet
+        working-directory: 200ms-demo
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -32,7 +32,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: 200ms-vibenet/package-lock.json
+          cache-dependency-path: 200ms-demo/package-lock.json
 
       - name: Install dependencies
         run: npm ci
