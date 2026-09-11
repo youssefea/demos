@@ -41,7 +41,7 @@ jobs:
         run: npm run test:math
 
       - name: Build the /demos/200ms/ path
-        run: npm run build:pages
+        run: npm run build -- --base=/demos/200ms/
 
       - name: Assemble Pages artifact
         run: |
