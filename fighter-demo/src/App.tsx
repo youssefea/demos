@@ -5,9 +5,10 @@ import { formatUnits, HIT_UNITS, MATCH_LIMIT, type Side } from './ledger'
 import { ArenaNetwork } from './network'
 import { Renderer } from './renderer'
 import { Setup } from './setup'
+import { combatSnapshot, JevController, requestDecision } from './jev'
 
 type Mode = 'idle' | 'setup' | 'ready' | 'playing' | 'paused' | 'finished' | 'error'
-const name = (side: Side) => side === 'player' ? 'YOU' : 'BOT'
+const name = (side: Side) => side === 'player' ? 'YOU' : 'JEV'
 const short = (hash: string) => `${hash.slice(0, 6)}…${hash.slice(-4)}`
 export default function App() {
   const [mode, updateMode] = useState<Mode>('idle')
@@ -21,12 +22,13 @@ export default function App() {
   const canvas = useRef<HTMLCanvasElement>(null)
   const game = useRef(new Combat())
   const input = useRef(emptyInput())
+  const jev = useRef<JevController | null>(null)
   const renderer = useRef<Renderer | null>(null)
   const network = useRef<ArenaNetwork | null>(null)
   const setup = useRef(new Setup())
   const live = useRef(true)
   const change = () => { if (live.current) redraw(v => v + 1) }
-  const setMode = (next: Mode) => { modeRef.current = next; updateMode(next); input.current = emptyInput() }
+  const setMode = (next: Mode) => { modeRef.current = next; updateMode(next); input.current = emptyInput(); if (next !== 'playing') jev.current?.suspend() }
   const beep = (confirmed: boolean) => {
     if (!soundRef.current || !audio.current) return
     const a = audio.current, oscillator = a.createOscillator(), gain = a.createGain()
@@ -40,13 +42,18 @@ export default function App() {
   useEffect(() => {
     live.current = true
     renderer.current = new Renderer(canvas.current!)
+    jev.current = new JevController(requestDecision(import.meta.env.VITE_JEV_API_URL || 'https://block-fighter-jev.vercel.app/api/decide'))
     let raf = 0, last = performance.now(), lastUi = 0
     const frame = (now: number) => {
       const dt = now - last; last = now
       const n = network.current, g = game.current
+      if (modeRef.current === 'playing' && n && n.ledger.matchCount >= MATCH_LIMIT) g.finish()
+      // Model scheduling uses wall time and runs even while combat waits for a fresh decision.
+      jev.current?.tick(modeRef.current === 'playing' && !!n && !n.blocked && !g.finished && g.countdown === 0 && !document.hidden, () => combatSnapshot(g))
       if (modeRef.current === 'playing' && n) {
-        if (n.ledger.matchCount >= MATCH_LIMIT) g.finish()
-        if (!n.blocked) g.step(dt, input.current, victim => n.hit(victim), event => { renderer.current?.event(event); if (event.kind === 'hit') beep(false) })
+        if (!n.blocked && (g.countdown > 0 || jev.current?.view.status === 'live')) {
+          g.step(dt, input.current, victim => n.hit(victim), event => { renderer.current?.event(event); if (event.kind === 'hit') beep(false) }, jev.current?.input(g.fighters.player.x, g.fighters.bot.x))
+        }
         if (g.finished) setMode('finished')
       }
       if (!document.hidden) renderer.current?.draw(g, now, ['idle', 'setup', 'error', 'ready'].includes(modeRef.current))
@@ -65,7 +72,7 @@ export default function App() {
     window.addEventListener('keydown', down); window.addEventListener('keyup', up)
     window.addEventListener('blur', pause); document.addEventListener('visibilitychange', hidden)
     return () => {
-      live.current = false; cancelAnimationFrame(raf); network.current?.close(); void audio.current?.close()
+      live.current = false; jev.current?.dispose(); cancelAnimationFrame(raf); network.current?.close(); void audio.current?.close()
       window.removeEventListener('keydown', down); window.removeEventListener('keyup', up)
       window.removeEventListener('blur', pause); document.removeEventListener('visibilitychange', hidden)
     }
@@ -86,7 +93,7 @@ export default function App() {
   const play = () => { setMode('playing'); canvas.current?.focus(); void audio.current?.resume() }
   const rematch = () => {
     if (!network.current?.ledger.newMatch()) return
-    game.current = new Combat(); play()
+    jev.current?.reset(); game.current = new Combat(); play()
   }
   const toggleSound = () => {
     const next = !soundRef.current
@@ -105,6 +112,8 @@ export default function App() {
   const net = ledger ? ledger.balances.player - n!.runtime.balances.player : 0n
   const active = ['playing', 'paused', 'finished'].includes(mode)
   const blocked = n?.blocked
+  const ai = jev.current?.view
+  const aiStatus = mode === 'playing' && g.countdown > 0 ? 'countdown' : mode === 'playing' ? ai?.status ?? 'waiting' : mode === 'paused' ? 'paused' : mode === 'finished' ? 'round over' : 'not connected'
   const control = (key: keyof Input, label: string, hint: string, className = '') => <button type="button" className={`pad ${className}`} aria-label={label} onPointerDown={e => press(key, e)} onPointerUp={() => { input.current[key] = false }} onPointerCancel={() => { input.current[key] = false }} onLostPointerCapture={() => { input.current[key] = false }} onKeyDown={e => { if ((e.key === ' ' || e.key === 'Enter') && modeRef.current === 'playing') { e.preventDefault(); input.current[key] = true } }} onKeyUp={() => { input.current[key] = false }} disabled={mode !== 'playing'}><b>{hint}</b><span>{label}</span></button>
   return <div className="app-shell">
     <header className="site-header">
@@ -113,30 +122,31 @@ export default function App() {
     </header>
     <main>
       <section className="intro" aria-labelledby="title">
-        <div><div className="eyebrow"><span className="blue-line" /> SPEED YOU CAN FEEL</div><h1 id="title">Every hit. <span>Onchain.</span></h1><p>A good old-fashioned fight. A whole new way to move money.</p></div>
+        <div><div className="eyebrow"><span className="blue-line" /> SPEED YOU CAN FEEL</div><h1 id="title">Every hit. <span>Onchain.</span></h1><p>You vs Jev, a decision-model opponent. Every landed hit moves test money.</p></div>
         <div className="intro-note"><span className="mini-coin">$</span><div><strong>LAND A HIT. MOVE 0.05.</strong><small>Vibenet test USDV. Never real money.</small></div></div>
       </section>
       <div className="game-layout">
         <section className="game-column" aria-label="Fighting game">
           <div className="cabinet" onBlur={e => { if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget as Node)) pause() }}>
-            <div className="cabinet-top"><span><i className="tiny-square" /> ROOFTOP RUMBLE</span><span>1 PLAYER <b>VS</b> CPU <span className="stage-number"> / STAGE 01</span></span></div>
+            <div className="cabinet-top"><span><i className="tiny-square" /> ROOFTOP RUMBLE</span><span>YOU <b>VS</b> JEV <span className="stage-number"> / STAGE 01</span></span></div>
             <div className="arena">
               <canvas ref={canvas} width="640" height="360" tabIndex={0} aria-label="Block Fighter arena. A and D move, J punch, K kick, L block, P pause. Health and timer are shown above the arena." />
               <div className="hud" aria-label="Round status">
                 <div className="fighter-hud"><div className="fighter-label"><strong><span className="player-dot" /> YOU</strong><span>BLUE CORNER</span></div><div className="health" role="meter" aria-label="Your health" aria-valuenow={g.fighters.player.hp} aria-valuemin={0} aria-valuemax={MAX_HP}><i style={{ width: `${g.fighters.player.hp / MAX_HP * 100}%` }} /></div><div className="hud-funds">{ledger ? formatUnits(ledger.balances.player) : '—'} <span>USDV</span></div></div>
                 <div className="timer"><span>ROUND 01</span><b>{Math.ceil(g.remaining / 1000).toString().padStart(2, '0')}</b><small>SECONDS</small></div>
-                <div className="fighter-hud bot-hud"><div className="fighter-label"><span>ORANGE CORNER</span><strong>BOT <span className="player-dot" /></strong></div><div className="health" role="meter" aria-label="Bot health" aria-valuenow={g.fighters.bot.hp} aria-valuemin={0} aria-valuemax={MAX_HP}><i style={{ width: `${g.fighters.bot.hp / MAX_HP * 100}%` }} /></div><div className="hud-funds">{ledger ? formatUnits(ledger.balances.bot) : '—'} <span>USDV</span></div></div>
+                <div className="fighter-hud bot-hud"><div className="fighter-label"><span>ORANGE CORNER</span><strong>JEV <span className="player-dot" /></strong></div><div className="health" role="meter" aria-label="Jev health" aria-valuenow={g.fighters.bot.hp} aria-valuemin={0} aria-valuemax={MAX_HP}><i style={{ width: `${g.fighters.bot.hp / MAX_HP * 100}%` }} /></div><div className="hud-funds">{ledger ? formatUnits(ledger.balances.bot) : '—'} <span>USDV</span></div></div>
               </div>
               {mode === 'playing' && g.countdown > 0 && !blocked && <div className="countdown" aria-live="off">{g.countdown > 900 ? 'READY?' : 'FIGHT!'}</div>}
               {mode === 'playing' && blocked && <div className="network-hold"><span className="spinner" /><strong>HOLD THAT PUNCH</strong><p>{blocked}</p><button onClick={() => n?.retry()}>Check receipts</button></div>}
+              {mode === 'playing' && g.countdown === 0 && !blocked && ai?.status !== 'live' && <div className="network-hold jev-hold"><span className="spinner" /><strong>{ai?.status === 'unavailable' ? 'JEV UNAVAILABLE' : 'JEV IS THINKING'}</strong><p>Combat paused until a fresh model decision.<br />{ai?.status === 'unavailable' ? 'Retrying automatically. No scripted fallback.' : 'The real Jev model is choosing its next move.'}</p></div>}
               {mode !== 'playing' && <div className={`arena-overlay ${active ? 'dimmed' : ''}`}>
                 <div className="overlay-card">
-                  {mode === 'idle' && <><span className="pixel-kicker">INSERT ABSOLUTELY NO COINS</span><h2>BLOCK<br /><span>FIGHTER</span><sup>01</sup></h2><p>Fast fists. Real testnet transfers.</p><button className="primary start" onClick={() => void initialize()}>ENTER THE ARENA <span>↗</span></button><small>No wallet needed · Two local test accounts</small></>}
+                  {mode === 'idle' && <><span className="pixel-kicker">INSERT ABSOLUTELY NO COINS</span><h2>BLOCK<br /><span>FIGHTER</span><sup>01</sup></h2><p>Fight Jev. Real AI decisions. Real testnet transfers.</p><button className="primary start" onClick={() => void initialize()}>ENTER THE ARENA <span>↗</span></button><small>No wallet needed · Two local test accounts</small></>}
                   {mode === 'setup' && <><span className="pixel-kicker">PREPARING BOTH CORNERS</span><h2 className="smaller">GEARING UP<span className="loading-dots">...</span></h2><div className="setup-track"><i /></div><p className="setup-progress" role="status">{progress}</p><small>Faucet cooldowns can take a minute. No real money.</small></>}
                   {mode === 'error' && <><span className="pixel-kicker">NETWORK TIMEOUT, NOT A KNOCKOUT</span><h2 className="smaller">TAKE A BREATHER</h2><p className="setup-progress" role="alert">{setupError}</p><button className="primary" onClick={() => void initialize()}>RETRY SETUP ↻</button><small>Same local accounts. No simulated fallback.</small></>}
                   {mode === 'ready' && <><span className="pixel-kicker">BOTH ACCOUNTS FUNDED</span><h2 className="smaller">YOU'RE UP.</h2><p>Close the gap with D. Hold J or K to attack.<br />L blocks hits — and their transfers.</p><button className="primary" onClick={play}>LET'S FIGHT →</button><small>60 seconds · 0.05 test USDV per landed hit</small></>}
                   {mode === 'paused' && <><span className="pixel-kicker">TAKE YOUR TIME</span><h2 className="smaller">PAUSED.</h2><p>No new hits. Submitted transfers still settle.</p><button className="primary" onClick={play}>BACK TO THE FIGHT →</button></>}
-                  {mode === 'finished' && <><span className="pixel-kicker">{g.remaining === 0 ? 'TIME’S UP' : 'ROUND COMPLETE'}</span><h2 className="smaller">{g.winner === 'draw' ? 'A FAIR FIGHT.' : g.winner === 'player' ? 'YOU WIN!' : 'BOT WINS.'}</h2><p>{g.hits.player} hits landed · {g.hits.bot} taken<br />Your confirmed net: {net > 0n ? '+' : ''}{formatUnits(net)} test USDV</p><button className="primary" disabled={Boolean(ledger?.unresolved.length) || (ledger?.transfers.length ?? 0) >= 1_000} onClick={rematch}>{ledger?.unresolved.length ? 'WAITING FOR SETTLEMENT…' : 'RUN IT BACK ↻'}</button><small>Balances only change on validated confirmations.</small></>}
+                  {mode === 'finished' && <><span className="pixel-kicker">{g.remaining === 0 ? 'TIME’S UP' : 'ROUND COMPLETE'}</span><h2 className="smaller">{g.winner === 'draw' ? 'A FAIR FIGHT.' : g.winner === 'player' ? 'YOU WIN!' : 'JEV WINS.'}</h2><p>{g.hits.player} hits landed · {g.hits.bot} taken<br />Your confirmed net: {net > 0n ? '+' : ''}{formatUnits(net)} test USDV</p><button className="primary" disabled={Boolean(ledger?.unresolved.length) || (ledger?.transfers.length ?? 0) >= 1_000} onClick={rematch}>{ledger?.unresolved.length ? 'WAITING FOR SETTLEMENT…' : 'RUN IT BACK ↻'}</button><small>Balances only change on validated confirmations.</small></>}
                 </div>
               </div>}
               <div className="arena-bottom"><span><i /> VIBENET TEST ARENA</span><span>NO REAL MONEY</span></div>
@@ -146,6 +156,10 @@ export default function App() {
               <div className="control-group actions">{control('punch', 'Punch', 'J', 'punch-pad')}{control('kick', 'Kick', 'K', 'kick-pad')}{control('block', 'Block', 'L', 'block-pad')}</div>
               <div className="utilities"><button className="utility" aria-label={sound ? 'Mute game sound' : 'Enable game sound'} aria-pressed={sound} onClick={toggleSound}>{sound ? '♪ ON' : '♪ OFF'}</button><button className="utility" disabled={mode !== 'playing' && mode !== 'paused'} onClick={mode === 'paused' ? play : pause} aria-label={mode === 'paused' ? 'Resume game' : 'Pause game'}>{mode === 'paused' ? '▶' : 'Ⅱ'} <span>PAUSE</span></button></div>
             </div>
+          </div>
+          <div className="jev-status" aria-label="Jev decision model status" aria-live="off">
+            <div><strong><i className={`status-dot ${aiStatus === 'live' ? 'connected' : ''}`} /> JEV</strong><span>{aiStatus}{ai?.action && aiStatus === 'live' ? ` · ${ai.action}` : ''}</span><span>{ai?.metrics ? `Last inference ${ai.metrics.inferenceMs} ms · round trip ${ai.metrics.roundTripMs} ms` : 'Inference — · round trip —'}</span></div>
+            <p>TypeSafe AI decision model via Vercel AI SDK · not a scripted bot. AI latency is separate from the 200ms network target.</p>
           </div>
           <div className="game-hint"><span><b>PRO TIP</b> Hold to throw. Get close. Block to keep your balance.</span><span>P / ESC to pause</span></div>
           <div className="stats-row">

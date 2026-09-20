@@ -16,12 +16,9 @@ export class Combat {
   finished = false
   winner: Side | 'draw' | null = null
   hits = { player: 0, bot: 0 }
-  private aiAt = 0
-  private aiBlockUntil = 0
-  private aiMove: 'punch' | 'kick' = 'punch'
   private rng: () => number
   constructor(rng: () => number = Math.random) { this.rng = rng }
-  step(dt: number, input: Input, pay: (victim: Side) => boolean, event: (event: CombatEvent) => void) {
+  step(dt: number, input: Input, pay: (victim: Side) => boolean, event: (event: CombatEvent) => void, aiInput: Input = emptyInput()) {
     if (this.finished || dt <= 0) return
     // Never catch up hidden-tab time or pay for missed animation frames.
     dt = Math.min(dt, 50)
@@ -33,25 +30,17 @@ export class Combat {
       if (this.elapsed >= f.poseUntil) f.move = 'idle'
       if (this.elapsed - f.lastHit > 1_100) f.combo = 0
     }
-    if (this.elapsed > this.aiAt) {
-      this.aiAt = this.elapsed + 430 + this.rng() * 400
-      this.aiBlockUntil = this.rng() < .23 ? this.elapsed + 280 : 0
-      this.aiMove = this.rng() < .4 ? 'kick' : 'punch'
-    }
     const playerBlocking = input.block && this.elapsed >= p.poseUntil
     if (playerBlocking) p.move = 'block'
-    if (this.aiBlockUntil > this.elapsed && this.elapsed >= b.poseUntil) b.move = 'block'
+    if (aiInput.block && this.elapsed >= b.poseUntil) b.move = 'block'
     if (!playerBlocking && this.elapsed >= p.poseUntil) {
       const direction = Number(input.right) - Number(input.left)
       if (direction) { p.x += direction * dt * .18; p.move = 'walk' }
     }
-    // The bot approaches generously, with occasional retreats to invite footwork.
-    if (b.move === 'idle') {
-      const gap = Math.abs(b.x - p.x)
-      const retreat = Math.floor(this.elapsed / 3_200) % 5 === 4
-      const direction = gap > (retreat ? 150 : 67) ? -1 : retreat && gap < 140 ? 1 : 0
-      b.x += direction * dt * .10
-      if (direction) b.move = 'walk'
+    // Jev supplies explicit input only; no scripted fallback when inference is absent.
+    if (!aiInput.block && this.elapsed >= b.poseUntil) {
+      const direction = Number(aiInput.right) - Number(aiInput.left)
+      if (direction) { b.x += direction * dt * .10; b.move = 'walk' }
     }
     p.x = Math.max(45, Math.min(p.x, 555)); b.x = Math.max(85, Math.min(b.x, 595))
     if (b.x - p.x < 44) { const mid = Math.max(67, Math.min(573, (b.x + p.x) / 2)); p.x = mid - 22; b.x = mid + 22 }
@@ -59,9 +48,9 @@ export class Combat {
       if (input.kick) this.attack('player', 'kick', pay, event)
       else if (input.punch) this.attack('player', 'punch', pay, event)
     }
-    if (b.move !== 'block' && this.elapsed >= b.nextAttack && this.elapsed > this.aiAt - 170) {
-      this.attack('bot', this.aiMove, pay, event)
-      b.nextAttack = this.elapsed + 500 + this.rng() * 300
+    if (!aiInput.block) {
+      if (aiInput.kick) this.attack('bot', 'kick', pay, event)
+      else if (aiInput.punch) this.attack('bot', 'punch', pay, event)
     }
     if (p.hp <= 0 || b.hp <= 0 || this.remaining <= 0) this.finish()
   }
@@ -70,7 +59,8 @@ export class Combat {
     const attacker = this.fighters[side], victim = this.fighters[other(side)]
     if (this.elapsed < attacker.nextAttack || attacker.move === 'block' || attacker.move === 'hit' && this.elapsed < attacker.poseUntil) return false
     const range = move === 'punch' ? 84 : 108
-    attacker.nextAttack = this.elapsed + (move === 'punch' ? 230 : 300)
+    // Preserve the opponent's slower 500–800ms attack guard, including misses.
+    attacker.nextAttack = this.elapsed + (side === 'bot' ? 500 + this.rng() * 300 : move === 'punch' ? 230 : 300)
     attacker.move = move; attacker.poseUntil = this.elapsed + (move === 'punch' ? 160 : 220)
     const detail = { attacker: side, victim: victim.side, x: victim.x, move, combo: attacker.combo }
     if (Math.abs(victim.x - attacker.x) > range) { event({ ...detail, kind: 'miss' }); return false }

@@ -10,7 +10,11 @@ try {
   for (const width of [1440, 390]) {
     const page = await browser.newPage({ viewport: { width, height: width === 390 ? 844 : 1100 }, reducedMotion: 'reduce' })
     page.on('pageerror', error => errors.push(error.message))
-    let networkCalls = 0
+    let networkCalls = 0, modelCalls = 0
+    await page.route('**/api/decide', route => {
+      modelCalls++
+      return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Offline smoke: Jev unavailable' }) })
+    })
     await page.route(/https:\/\/.*vibes\.base\.org\//, route => {
       networkCalls++
       return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Offline smoke test: Vibenet unavailable' }) })
@@ -19,6 +23,9 @@ try {
     await page.getByRole('button', { name: 'ENTER THE ARENA' }).waitFor()
     await page.waitForTimeout(350)
     assert.equal(networkCalls, 0, 'No prestart chain activity')
+    assert.equal(modelCalls, 0, 'No prestart model requests')
+    assert.equal(await page.getByRole('meter', { name: 'Jev health' }).count(), 1)
+    assert.match(await page.getByLabel('Jev decision model status').textContent(), /not connected/)
     assert.equal(await page.locator('canvas').count(), 1)
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'No horizontal overflow')
     const colors = await page.locator('canvas').evaluate(canvas => {
@@ -34,6 +41,7 @@ try {
     await page.getByRole('button', { name: 'RETRY SETUP' }).click()
     await page.getByRole('button', { name: 'RETRY SETUP' }).waitFor()
     assert.ok(networkCalls > 0)
+    assert.equal(modelCalls, 0, 'No model requests while setup has failed')
     console.log(`PASS ${width}px: canvas, layout, zero prestart network calls, truthful setup failure + retry`)
     await page.close()
   }

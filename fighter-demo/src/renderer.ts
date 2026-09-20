@@ -142,6 +142,6 @@ export class Renderer {
     }
     c.restore()
     this.rect(f.x - 3, 300, 6, 3, blue ? '#639fff' : '#fba76e')
-    this.text(blue ? '01 / YOU' : '02 / BOT', f.x, 310, 7, blue ? '#a0c6ff' : '#eeb69c')
+    this.text(blue ? '01 / YOU' : '02 / JEV', f.x, 310, 7, blue ? '#a0c6ff' : '#eeb69c')
   }
 }

@@ -42,7 +42,7 @@ export class Setup {
     const { accounts } = this.prepared
     const faucet = new FaucetQueue(faucetStatus, token)
     for (const side of ['player', 'bot'] as const) {
-      const label = side === 'player' ? 'Your fighter' : 'Sparring bot'
+      const label = side === 'player' ? 'Your fighter' : 'Jev'
       progress(`${label}: funding test gas · faucet cooldown ${Math.max(faucetStatus.ip_cooldown_secs, faucetStatus.addr_cooldown_secs)}s between drips…`)
       await faucet.ensureEth(accounts[side].account.address, MIN_ETH_BOOTSTRAP)
       progress(`${label}: funding test USDV · waiting for faucet / balance confirmation…`)
@@ -51,7 +51,7 @@ export class Setup {
     const block = await readLatestBlock()
     const maxFeePerGas = BigInt(block.baseFeePerGas ?? 1_000_000_000n) * 2n + PRIORITY_FEE
     for (const side of ['player', 'bot'] as const) {
-      progress(`${side === 'player' ? 'Your fighter' : 'Sparring bot'}: deploying native account & calibrating gas…`)
+      progress(`${side === 'player' ? 'Your fighter' : 'Jev'}: deploying native account & calibrating gas…`)
       const fighter = accounts[side]
       const sender = fighter.account.address
       let sequence = await getTransactionCount(publicClient, { address: sender, nonceKey: 0n })

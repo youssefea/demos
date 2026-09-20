@@ -1,6 +1,6 @@
 # BLOCK FIGHTER
 
-A browser-only, original pixel-art player-vs-bot arcade fighter. **Each successful, unblocked hit submits one real transfer of 0.05 Vibenet test USDV (50,000 base units) from the fighter hit to the attacker.** Blocks and misses never transfer tokens. This is a devnet experiment, **not real money** and not a betting product.
+An original pixel-art arcade fighter: **you vs Jev**, the TypeSafe AI decision model (`typesafe-ai/jev`) called through **Vercel AI SDK**. Combat and signing run in your browser; model evaluation runs in a tiny separate [Vercel API](../fighter-ai/). **Each successful, unblocked hit submits one real transfer of 0.05 Vibenet test USDV (50,000 base units) from the fighter hit to the attacker.** Blocks and misses never transfer tokens. This is a devnet experiment, **not real money** and not a betting product.
 
 ## Run locally
 
@@ -18,7 +18,7 @@ npm run preview
 # http://localhost:4173
 ```
 
-No environment variables, wallet extension, backend or external assets/fonts are needed. Nothing is funded, signed or broadcast before **Enter the arena**. That button creates **two separate memory-only smart accounts**, one for you and one for the bot, requests faucet gas and USDV for both, deploys both and calibrates gas. The setup deployment performs a one-base-unit **self-transfer**; it does not move money between fighters. The initial balances are read after funding. Click **Let's fight** to start the round.
+No wallet extension or external assets/fonts are needed. The default model endpoint is `https://block-fighter-jev.vercel.app/api/decide`; override the **public URL only** with `VITE_JEV_API_URL` at build/dev time. No provider credentials belong in frontend variables. Follow [fighter-ai setup](../fighter-ai/README.md) to deploy or run your own API with server-side Vercel OIDC credentials. Nothing is funded, signed or broadcast before **Enter the arena**. That button creates **two separate memory-only smart accounts**, one for you and one for Jev, requests faucet gas and USDV for both, deploys both and calibrates gas. The setup deployment performs a one-base-unit **self-transfer**; it does not move money between fighters. The initial balances are read after funding. Click **Let's fight** to start the round.
 
 The faucet currently rate-limits requests by IP/address. Four sequential drips can take a minute or longer. Progress identifies each funding step and the cooldown. On failure, **Retry setup** reuses the page's partially prepared accounts; it does not silently switch to fake transactions. Reloading creates fresh accounts and may hit another faucet cooldown.
 
@@ -33,9 +33,21 @@ The faucet currently rate-limits requests by IP/address. Four sequential drips c
 | Pause | P / Escape | Pause button |
 | Resume / rematch | Focus and activate the on-screen button | Tap the button |
 
-Get close before attacking; punches have shorter reach than kicks. Health, a 60-second active-play timer, hit combos, animated attacks/blocks/KO, sparks and flying confirmation coins are rendered over a rooftop skyline. The bot approaches and sometimes blocks or retreats, but attacks less often than the player. Highest remaining health wins at time; a knockout ends the round early. A transfer-cap round also ends on health. Rematches require all outstanding transfers to resolve.
+Get close before attacking; punches have shorter reach than kicks. Health, a 60-second active-play timer, hit combos, animated attacks/blocks/KO, sparks and flying confirmation coins are rendered over a rooftop skyline. Jev chooses punch, kick, block, approach, retreat or wait from live combat snapshots; there is no scripted opponent fallback. Jev retains the slower 500–800ms attack guard and movement speed, so model decisions cannot bypass combat fairness. Highest remaining health wins at time; a knockout ends the round early. A transfer-cap round also ends on health. Rematches require all outstanding transfers to resolve.
 
 Losing browser focus, hiding the tab or moving focus outside the game cabinet pauses combat. Resume is explicit. Frame deltas are clamped: no background catch-up attacks. Already-submitted transactions may still confirm while paused. Keyboard focus remains visible; controls are real labeled buttons and work with Enter/Space. The high-frequency transaction feed is deliberately **not** a live screen-reader announcement region. Reduced-motion preference suppresses shake/drifting decoration. Sound is off by default and can be enabled manually.
+
+## Real Jev decisions, bounded and visible
+
+The server uses `experimental_evaluate` with the fixed **`typesafe-ai/jev` evaluation model**, a fixed tactical question and six allowlisted choices. This is not chat narration. The browser sends only bounded positions, health, poses, cooldowns, recent-hit timing, combos and remaining round time. Ranges and instructions live on the server. **No account addresses, signers, keys, signed transactions or wallet permissions are sent to Jev.**
+
+- At most one decision request in flight; 450ms minimum request-start cadence. Snapshots are captured on dispatch, not when a response arrives.
+- Each decision lives at most 650ms and never beyond two seconds from its snapshot. Pausing, losing focus/visibility, network backpressure, rematch and disposal abort the current request and clear held AI input. Old-generation or stale responses are discarded.
+- No requests in idle, setup, ready, countdown, paused, hidden or finished states. Resume reacquires a fresh decision. Countdown and network settlement remain independent of inference.
+- If the decision expires, the provider is unavailable, or a response is malformed, **combat and its active-play clock wait**. The UI says thinking/unavailable and retries automatically with a one-second failure backoff. Rendering, receipt reconciliation, pause controls and the wall-clock decision scheduler continue. No network/combat-pause deadlock, delayed catch-up attacks, fabricated decisions or silently substituted practice bot.
+- The status strip identifies **JEV**, the current decision, live/waiting/paused/unavailable state, last server-observed SDK inference duration and browser round trip. Inference timing includes gateway/provider transport; it is separate from hit-to-confirm timing and the **200ms block-interval target**, not a promise of 200ms AI inference.
+
+The public API has strict schema/body limits, timeout/no retries and best-effort per-instance IP throttling, but no user authentication. CORS is not authentication. Public calls can incur costs; see the [API cost/security notes](../fighter-ai/README.md#public-endpoint-cost-and-abuse-exposure) and configure Vercel platform spending/rate controls before publishing.
 
 ## Real network, cautious accounting
 
@@ -56,7 +68,7 @@ Losing browser focus, hiding the tab or moving focus outside the game cabinet pa
 
 ```sh
 npm test
-# Deterministic combat + ledger/event validation tests, no network or faucet.
+# Deterministic Jev scheduler/adapter, combat + ledger tests, no external network or faucet.
 
 # Optional no-faucet browser smoke: keep npm run dev running in another terminal.
 npx playwright install chromium
@@ -65,19 +77,21 @@ npm run test:browser
 FIGHTER_URL=http://localhost:5174 CHROME_EXECUTABLE_PATH=/path/to/chromium npm run test:browser
 ```
 
-Unit coverage includes attack reach, blocked hits, cooldowns, bot payment direction, KO/time bounds, clamped background time, arena collision bounds, reservation/backpressure, exact event/receipt matching, pre-broadcast registration race, duplicate/out-of-order/bidirectional confirmations, reverted/missing-event/unknown paths, late confirmation, spend limits and balance conservation.
+Unit coverage includes action mapping/TTL, one-in-flight/cadence, pause/resume/rematch/disposal, stale response rejection, provider failures and transport validation, snapshot compatibility with the API schema, attack reach, blocked hits, cooldowns, Jev payment direction, KO/time bounds, clamped background time, arena collision bounds, reservation/backpressure, exact event/receipt matching, pre-broadcast registration race, duplicate/out-of-order/bidirectional confirmations, reverted/missing-event/unknown paths, late confirmation, spend limits and balance conservation.
 
-Browser smoke checks desktop (1440px) and mobile (390px), pixel rendering, no horizontal overflow, no prestart chain requests, a deliberately offline setup error and retry, and zero runtime errors. It saves screenshots to `/tmp/block-fighter-{width}.png`. **The browser smoke intentionally blocks the network; it is not proof of live settlement.** Independent live review should complete setup, hold J/K in range, allow bot hits, verify both directions in the explorer, disconnect WSS to exercise receipt fallback, and check blur/pause/rematch. Do not run multiple faucet-consuming tests concurrently on one IP.
+Browser smoke checks desktop (1440px) and mobile (390px), pixel rendering, no horizontal overflow, no prestart chain or model requests, a deliberately offline setup error and retry, and zero runtime errors. It saves screenshots to `/tmp/block-fighter-{width}.png`. **The browser smoke intentionally blocks the network; it is not proof of live settlement.** Independent live review should complete setup, hold J/K in range, allow Jev hits, verify both directions in the explorer, disconnect WSS to exercise receipt fallback, and check blur/pause/rematch. Do not run multiple faucet-consuming tests concurrently on one IP.
 
 ## Publishing
 
-The repository's **single** `.github/workflows/deploy-200ms-preview-pages.yml` builds/tests both apps, assembles one artifact, and preserves both routes:
+The repository's **single** `.github/workflows/deploy-200ms-preview-pages.yml` builds/tests both frontend apps, tests/typechecks the API, assembles only the two frontend outputs into one artifact, and preserves both routes:
 
 - `/demos/200ms/` — original streaming demo
 - `/demos/fighter/` — BLOCK FIGHTER
 
-For an equivalent fighter production build: `npm run build -- --base=/demos/fighter/`. No competing Pages workflow or backend is introduced.
+For an equivalent fighter production build: `npm run build -- --base=/demos/fighter/`. No competing Pages workflow is introduced. `fighter-ai` is deployed separately to Vercel and is never published as part of the Pages artifact. Set the repository Actions variable `VITE_JEV_API_URL` if you use a different endpoint.
 
 ## Limitations
+
+Jev requires a reachable Vercel AI Gateway deployment and available credits. The evaluation API is experimental and pinned; model availability, quality and latency are not guaranteed. The demo deliberately waits rather than pretending a scripted action came from Jev.
 
 Vibenet is an ephemeral devnet: RPC/WSS downtime, faucet limits, resets, missing history and latency spikes are expected. The page detects stale/backward heads and periodically checks genesis; reset detection is not instantaneous. It does not promise finality or recover keys/history after a reload. Previously observed inclusion is not rolled back in the UI on a later chain reorganization; reload after a detected reset. Unknown transfers deliberately stop the fight rather than risk overspending. Accounts are not automatically refilled during matches; the 50-USDV session cap is below normal faucet funding. Gas exhaustion/rejection is reported, not subsidized by a backend. Browser keys are appropriate **only for disposable test funds**. The vendored SDK makes the initial JavaScript bundle relatively large (~600 kB uncompressed); there are no image/audio/font downloads.

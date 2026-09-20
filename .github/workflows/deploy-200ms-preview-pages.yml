@@ -6,6 +6,7 @@ on:
     paths:
       - "200ms-demo/**"
       - "fighter-demo/**"
+      - "fighter-ai/**"
       - ".github/workflows/deploy-200ms-preview-pages.yml"
   workflow_dispatch:
 
@@ -36,6 +37,7 @@ jobs:
           cache-dependency-path: |
             200ms-demo/package-lock.json
             fighter-demo/package-lock.json
+            fighter-ai/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -46,16 +48,28 @@ jobs:
       - name: Build the /demos/200ms/ path
         run: npm run build -- --base=/demos/200ms/
 
+      # Validate the API, but never include it in the GitHub Pages artifact.
+      # Its separate Vercel deployment is managed independently.
+      - name: Install Jev API dependencies
+        working-directory: fighter-ai
+        run: npm ci
+
+      - name: Test and typecheck Jev API
+        working-directory: fighter-ai
+        run: npm test && npm run build
+
       - name: Install fighter dependencies
         working-directory: fighter-demo
         run: npm ci
 
-      - name: Test combat and transfer accounting
+      - name: Test Jev scheduling, combat and transfer accounting
         working-directory: fighter-demo
         run: npm test
 
       - name: Build the /demos/fighter/ path
         working-directory: fighter-demo
+        env:
+          VITE_JEV_API_URL: ${{ vars.VITE_JEV_API_URL || 'https://block-fighter-jev.vercel.app/api/decide' }}
         run: npm run build -- --base=/demos/fighter/
 
       - name: Assemble both demos in one Pages artifact

@@ -60,9 +60,9 @@ test('countdown never sends; long frame never catches up hidden-tab time', () =>
   g.countdown = 0; g.step(60_000, emptyInput(), () => true, noop)
   assert.equal(g.remaining, 59_950)
 })
-test('seeded bot produces a playable 60-second round, blocking prevents payments', () => {
-  const g = new Combat(() => .5); g.countdown = 0; let hits = 0
-  for (let i = 0; i < 1_200; i++) g.step(50, { ...emptyInput(), block: true }, () => { hits++; return true }, noop)
+test('explicit opponent attacks produce a 60-second round; blocking prevents payments', () => {
+  const g = close(); let hits = 0
+  for (let i = 0; i < 1_200; i++) g.step(50, { ...emptyInput(), block: true }, () => { hits++; return true }, noop, { ...emptyInput(), kick: true })
   assert.equal(g.finished, true); assert.equal(hits, 0); assert.equal(g.fighters.player.hp, MAX_HP)
 })
 test('movement stays in arena and fighters cannot overlap', () => {
@@ -70,4 +70,32 @@ test('movement stays in arena and fighters cannot overlap', () => {
   for (let i = 0; i < 100; i++) g.step(50, { ...emptyInput(), right: true }, () => true, noop)
   assert.ok(g.fighters.bot.x - g.fighters.player.x >= 44)
   assert.ok(g.fighters.player.x >= 45 && g.fighters.bot.x <= 595)
+})
+
+test('without explicit Jev input there is no scripted movement, blocking or attack', () => {
+  const g = close(); const before = g.fighters.bot.x
+  for (let i = 0; i < 100; i++) g.step(50, emptyInput(), () => { throw new Error('no fallback payment') }, noop)
+  assert.equal(g.fighters.bot.x, before); assert.equal(g.fighters.bot.move, 'idle')
+})
+test('Jev held attacks obey original slower cooldown and victim payment direction', () => {
+  const g = close(), victims: string[] = []
+  const ai = { ...emptyInput(), punch: true }, pay = (victim: string) => { victims.push(victim); return true }
+  g.step(50, emptyInput(), pay, noop, ai)
+  assert.deepEqual(victims, ['player']); assert.equal(g.fighters.bot.nextAttack, 700)
+  for (let i = 0; i < 12; i++) g.step(50, emptyInput(), pay, noop, ai)
+  g.step(49, emptyInput(), pay, noop, ai); assert.equal(victims.length, 1)
+  g.step(1, emptyInput(), pay, noop, ai); assert.deepEqual(victims, ['player', 'player'])
+})
+test('explicit Jev approach/retreat/block respect movement speed, guard and pose locks', () => {
+  const g = close()
+  g.step(50, emptyInput(), () => true, noop, { ...emptyInput(), left: true })
+  assert.equal(g.fighters.bot.x, 295)
+  g.step(50, emptyInput(), () => true, noop, { ...emptyInput(), right: true })
+  assert.equal(g.fighters.bot.x, 300)
+  g.step(50, { ...emptyInput(), punch: true }, () => { throw new Error('blocked hit must not pay') }, noop, { ...emptyInput(), block: true, left: true, kick: true })
+  assert.equal(g.fighters.bot.move, 'block'); assert.equal(g.fighters.bot.x, 300)
+  assert.equal(g.fighters.bot.hp, MAX_HP)
+  g.fighters.bot.move = 'hit'; g.fighters.bot.poseUntil = g.elapsed + 85
+  g.step(50, emptyInput(), () => { throw new Error('hit stun must not pay') }, noop, { ...emptyInput(), punch: true, left: true })
+  assert.equal(g.fighters.bot.x, 300)
 })
