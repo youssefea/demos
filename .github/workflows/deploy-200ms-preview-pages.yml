@@ -1,10 +1,11 @@
-name: Deploy 200ms demo preview
+name: Deploy Base demo previews
 
 on:
   push:
     branches: [master]
     paths:
       - "200ms-demo/**"
+      - "fighter-demo/**"
       - ".github/workflows/deploy-200ms-preview-pages.yml"
   workflow_dispatch:
 
@@ -32,7 +33,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: 200ms-demo/package-lock.json
+          cache-dependency-path: |
+            200ms-demo/package-lock.json
+            fighter-demo/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -43,10 +46,23 @@ jobs:
       - name: Build the /demos/200ms/ path
         run: npm run build -- --base=/demos/200ms/
 
-      - name: Assemble Pages artifact
+      - name: Install fighter dependencies
+        working-directory: fighter-demo
+        run: npm ci
+
+      - name: Test combat and transfer accounting
+        working-directory: fighter-demo
+        run: npm test
+
+      - name: Build the /demos/fighter/ path
+        working-directory: fighter-demo
+        run: npm run build -- --base=/demos/fighter/
+
+      - name: Assemble both demos in one Pages artifact
         run: |
-          mkdir -p ../pages/200ms
+          mkdir -p ../pages/200ms ../pages/fighter
           cp -R dist/. ../pages/200ms/
+          cp -R ../fighter-demo/dist/. ../pages/fighter/
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
