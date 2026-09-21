@@ -1,0 +1,10 @@
+{
+  "name": "jev-one-second", "version": "1.0.0", "private": true, "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0", "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 0.0.0.0", "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "test:browser": "node tests/browser-smoke.mjs"
+  },
+  "dependencies": { "@vibenet/aa": "file:../200ms-demo/vendor/aa", "react": "^19.3.0", "react-dom": "^19.3.0" },
+  "devDependencies": { "@types/react": "^19.3.0", "@types/react-dom": "^19.3.0", "@vitejs/plugin-react": "^6.1.1", "typescript": "^7.0.2", "playwright": "^1.58.2", "vite": "^8.3.0" }
+}

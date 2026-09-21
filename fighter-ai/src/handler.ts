@@ -5,7 +5,7 @@ export const MAX_BODY_BYTES = 2_048
 export const TIMEOUT_MS = 2_000
 const ORIGINS = new Set(['https://youssefea.github.io', 'http://localhost:5174', 'http://localhost:4173'])
 type Request = IncomingMessage & { body?: unknown }
-type Inference = (snapshot: Snapshot, signal: AbortSignal) => Promise<unknown>
+type Inference<T> = (snapshot: T, signal: AbortSignal) => Promise<unknown>
 
 /** Best effort per warm instance, not distributed abuse/cost protection. */
 export class RateLimit {
@@ -45,7 +45,14 @@ async function body(req: Request): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString('utf8'))
 }
 
-export function createHandler(infer: Inference, limit = new RateLimit(), timeoutMs = TIMEOUT_MS) {
+export function createHandler(infer: Inference<Snapshot>, limit = new RateLimit(), timeoutMs = TIMEOUT_MS) {
+  return createDecisionHandler(infer, { validate: isSnapshot, validAnswer: isAction, field: 'action', model: MODEL, origins: ORIGINS, invalid: 'Invalid combat snapshot' }, limit, timeoutMs)
+}
+
+export function createDecisionHandler<T>(infer: Inference<T>, options: {
+  validate: (value: unknown) => value is T; validAnswer: (value: unknown) => boolean
+  field: string; model: string; origins: ReadonlySet<string>; invalid: string
+}, limit = new RateLimit(), timeoutMs = TIMEOUT_MS) {
   return async (req: Request, res: ServerResponse) => {
     res.setHeader('Cache-Control', 'no-store')
     res.setHeader('Vary', 'Origin')
@@ -56,7 +63,7 @@ export function createHandler(infer: Inference, limit = new RateLimit(), timeout
       res.end(value ? JSON.stringify(value) : undefined)
     }
     const origin = req.headers.origin
-    if (origin && !ORIGINS.has(origin)) return reply(403, { error: 'Origin not allowed' })
+    if (origin && !options.origins.has(origin)) return reply(403, { error: 'Origin not allowed' })
     if (origin) res.setHeader('Access-Control-Allow-Origin', origin)
     if (req.method === 'OPTIONS') {
       res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
@@ -72,7 +79,7 @@ export function createHandler(infer: Inference, limit = new RateLimit(), timeout
     if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) return reply(415, { error: 'JSON required' })
     let snapshot: unknown
     try { snapshot = await body(req) } catch (error) { return reply(error instanceof BodyError ? error.status : 400, { error: 'Invalid snapshot body' }) }
-    if (!isSnapshot(snapshot)) return reply(400, { error: 'Invalid combat snapshot' })
+    if (!options.validate(snapshot)) return reply(400, { error: options.invalid })
     const controller = new AbortController()
     const disconnected = () => { if (!res.writableEnded) controller.abort() }
     res.on('close', disconnected)
@@ -84,8 +91,8 @@ export function createHandler(infer: Inference, limit = new RateLimit(), timeout
         timer = setTimeout(() => { controller.abort(); reject(new Error('timeout')) }, timeoutMs)
       })
       const action = await Promise.race([infer(snapshot, controller.signal), timeout])
-      if (controller.signal.aborted || !isAction(action)) throw new Error('Invalid decision')
-      return reply(200, { action, model: MODEL, inferenceMs: Math.round(performance.now() - started) })
+      if (controller.signal.aborted || !options.validAnswer(action)) throw new Error('Invalid decision')
+      return reply(200, { [options.field]: action, model: options.model, inferenceMs: Math.round(performance.now() - started) })
     } catch {
       // Do not expose provider details, credentials, prompt text or a fake fallback action.
       return reply(503, { error: 'Jev unavailable' })

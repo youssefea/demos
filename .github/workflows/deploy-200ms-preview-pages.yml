@@ -7,6 +7,7 @@ on:
       - "200ms-demo/**"
       - "fighter-demo/**"
       - "fighter-ai/**"
+      - "prediction-demo/**"
       - ".github/workflows/deploy-200ms-preview-pages.yml"
   workflow_dispatch:
 
@@ -38,6 +39,7 @@ jobs:
             200ms-demo/package-lock.json
             fighter-demo/package-lock.json
             fighter-ai/package-lock.json
+            prediction-demo/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -72,11 +74,26 @@ jobs:
           VITE_JEV_API_URL: ${{ vars.VITE_JEV_API_URL || 'https://block-fighter-jev.vercel.app/api/decide' }}
         run: npm run build -- --base=/demos/fighter/
 
-      - name: Assemble both demos in one Pages artifact
+      - name: Install prediction dependencies
+        working-directory: prediction-demo
+        run: npm ci
+
+      - name: Test prediction timing and settlement accounting
+        working-directory: prediction-demo
+        run: npm test
+
+      - name: Build the /demos/predict/ path
+        working-directory: prediction-demo
+        env:
+          VITE_PREDICTION_API_URL: ${{ vars.VITE_PREDICTION_API_URL || 'https://block-fighter-jev.vercel.app/api/predict' }}
+        run: npm run build -- --base=/demos/predict/
+
+      - name: Assemble all demos in one Pages artifact
         run: |
-          mkdir -p ../pages/200ms ../pages/fighter
+          mkdir -p ../pages/200ms ../pages/fighter ../pages/predict
           cp -R dist/. ../pages/200ms/
           cp -R ../fighter-demo/dist/. ../pages/fighter/
+          cp -R ../prediction-demo/dist/. ../pages/predict/
 
       - name: Configure Pages
         uses: actions/configure-pages@v5

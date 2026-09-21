@@ -43,6 +43,7 @@ continuous stream of money rather than a sequence of isolated payments.
 | **Trading Agent** | Agents | `agents/trading-agent/` | CLI that scaffolds a fully configured LangChain trading agent on Base from a plain-English strategy |
 | **200ms demo** | Protocol demo | [`200ms-demo/`](200ms-demo/) | Demonstrates how Denim's 200ms canonical blocks enable new real-time use cases by streaming USDV through actual onchain transfers |
 | **BLOCK FIGHTER** | Onchain arcade | [`fighter-demo/`](fighter-demo/) | Pixel-art fighter against **Jev**, the TypeSafe AI decision model via Vercel AI SDK: each unblocked hit transfers 0.05 Vibenet test USDV between two browser-local smart accounts. No real money or wallet extension. |
+| **ONE SECOND** | Bitcoin prediction | [`prediction-demo/`](prediction-demo/) | You vs **Jev**: independent BTC Up/Down picks, a one-second price window after two 1-test-USDV stakes confirm, and onchain pot payouts/refunds. Browser-controlled test escrow, not real money or trustless betting. [Play](https://youssefea.github.io/demos/predict/) |
 
 ## Getting Started
 

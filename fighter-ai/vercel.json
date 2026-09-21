@@ -3,5 +3,5 @@
   "framework": null,
   "buildCommand": "npm run build",
   "outputDirectory": "public",
-  "functions": { "api/decide.ts": { "maxDuration": 5 } }
+  "functions": { "api/decide.ts": { "maxDuration": 5 }, "api/predict.ts": { "maxDuration": 5 } }
 }

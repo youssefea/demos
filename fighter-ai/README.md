@@ -1,10 +1,10 @@
-# BLOCK FIGHTER — Jev decision API
+# Jev decision API — fighter and ONE SECOND
 
 A separate, API-only Vercel project for the GitHub Pages [fighter](../fighter-demo/). Uses **Vercel AI SDK `experimental_evaluate`** with **TypeSafe AI `typesafe-ai/jev`**, an evaluation/decision model, not a chat model or scripted opponent. `ai@7.0.107` and `@ai-sdk/gateway@4.0.87` are pinned because this API is experimental. Verify SDK types and re-run tests before upgrading.
 
 ## Setup and deployment
 
-Node 22+; no dependencies on sibling demos at runtime. The Vercel project is `block-fighter-jev` under personal scope `my-team-fe629064` (not an organization). Deploy **this directory only**, with framework preset **Other**, output directory `public` (configured in `vercel.json`), and OIDC enabled. The public directory contains only a small API information page; Vercel compiles `api/decide.ts` separately as a function. The frontend stays on GitHub Pages; neither this API nor server dependencies are included in the Pages artifact.
+Node 22+; no dependencies on sibling demos at runtime. The Vercel project is `block-fighter-jev` under personal scope `my-team-fe629064` (not an organization). Deploy **this directory only**, with framework preset **Other**, output directory `public` (configured in `vercel.json`), and OIDC enabled. The public directory contains only a small API information page; Vercel compiles `api/decide.ts` and `api/predict.ts` separately as functions. The frontend stays on GitHub Pages; neither this API nor server dependencies are included in the Pages artifact.
 
 ```sh
 cd fighter-ai
@@ -62,6 +62,14 @@ The action is one of `punch`, `kick`, `block`, `approach`, `retreat`, `wait`. Th
 - `429` with `Retry-After: 1`: per-instance IP rate limit.
 - `503`: timeout, provider/credential failure or invalid model output. **No fallback decision.**
 - Provider deadline **2 seconds**, `maxRetries: 0`, function `maxDuration: 5`. Disconnects abort the SDK call; cancellation cannot guarantee a provider has not already charged for work. Responses use `Cache-Control: no-store`.
+
+## Bitcoin prediction endpoint
+
+`POST /api/predict` powers [ONE SECOND](../prediction-demo/), without changing the fighter contract. It uses the same fixed Jev model, SDK evaluation API, body limit, timeout, no-retry policy, safe error responses and per-instance rate limiter. Browser origins are `https://youssefea.github.io`, `http://localhost:5175`, and `http://localhost:4173`.
+
+The request is `{ "version": 1, "ticks": [{ "price": 65000.01, "time": 1234567890000 }, ...] }` (illustrative only; real requests need fresh timestamps). There must be 2–32 strictly time-ordered ticks, finite positive prices no greater than 10 million, safe-integer millisecond exchange timestamps within the last 30 seconds and at most 250ms in the future, and a latest timestamp no older than one second. Extra fields—including human picks, prompts, and wallet addresses—are rejected. The response is `{ "pick": "up", "model": "typesafe-ai/jev", "inferenceMs": 123 }`, with `pick` strictly `up` or `down`. The model does not see the human choice. Feed authenticity is not attested: these are bounded browser-supplied prices for a trusted-client test demo.
+
+The endpoint is `https://block-fighter-jev.vercel.app/api/predict`; the frontend override is `VITE_PREDICTION_API_URL`. Deploy this API before publishing the new prediction frontend. For local testing, run `VITE_PREDICTION_API_URL=http://localhost:3000/api/predict npm run dev` from `prediction-demo` alongside `vercel dev` here.
 
 ## Public endpoint cost and abuse exposure
 
