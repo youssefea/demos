@@ -2,10 +2,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { Round, ROUND_LIMIT, type Inference, type Network } from '../src/round.ts'
 import { Ledger, STAKE, type Transfer } from '../src/ledger.ts'
-import { PriceBook, endTick, parseTick, type Tick } from '../src/price.ts'
+import { PriceBook, MAX_AGE, PROOF_WAIT } from '../src/price.ts'
 
 function harness(infer: Inference = async () => ({ pick: 'down', inferenceMs: 100 })) {
-  let now = 1_000_000, visible = true, tradeId = 0
+  let now = 1_000_000, mono = now, visible = true, tradeId = 0
   const prices = new PriceBook(); prices.connected = true
   const ledger = new Ledger({ player: 20n * STAKE, jev: 20n * STAKE, pot: 0n })
   const net: Network = { ledger, blocked: null, send: (round, from, to, amount, label) => {
@@ -13,16 +13,20 @@ function harness(infer: Inference = async () => ({ pick: 'down', inferenceMs: 10
     if (tx.status === 'signing') ledger.register(tx, `0x${tx.id.toString(16).padStart(64, '0')}`)
     return tx
   } }
-  const round = new Round(net, prices, infer, () => now, () => now, () => visible)
-  const tick = (price = 100) => {
-    const t = prices.add({ type: 'ticker', product_id: 'BTC-USD', price: String(price), time: new Date(now).toISOString(), trade_id: ++tradeId }, now)!
-    round.onTick(t); return t
+  const round = new Round(net, prices, infer, () => now, () => mono, () => visible)
+  const frame = (value: object) => {
+    const tick = prices.add({ product_id: 'BTC-USD', time: new Date(now).toISOString(), ...value }, now)
+    if (tick) round.onTick(tick); else round.advance()
+    return tick
   }
-  tick(); now += 100; tick()
-  const pulse = (ms: number, price = 100, feed = true) => { for (let n = 0; n < ms; n += 50) { now += 50; if (feed && n % 200 === 150) tick(price); round.advance() } }
+  const tick = (price = 100, time = new Date(now).toISOString()) => frame({ type: tradeId ? 'match' : 'last_match', price: String(price), time, trade_id: ++tradeId })!
+  const heartbeat = (last_trade_id = tradeId, time = new Date(now).toISOString()) => frame({ type: 'heartbeat', last_trade_id, time })
+  const move = (ms: number) => { now += ms; mono += ms }
+  tick(); heartbeat(); move(100); heartbeat()
+  const pulse = (ms: number, price = 100, feed = true) => { for (let n = 0; n < ms; n += 50) { move(50); if (feed && n % 200 === 150) { tick(price); heartbeat() } round.advance() } }
   const confirm = (tx: Transfer) => ledger.confirm(tx, 100, now)
   const funded = async (pick: 'up' | 'down' = 'up') => { await round.start(); round.pick(pick); round.stakes.forEach(confirm); round.advance() }
-  return { round, ledger, net, prices, tick, pulse, confirm, funded, now: () => now, hide: () => { visible = false }, jump: (ms: number) => { now += ms; round.advance() } }
+  return { round, ledger, net, prices, tick, heartbeat, frame, move, pulse, confirm, funded, now: () => now, hide: () => { visible = false }, jump: (ms: number) => { now += ms; round.advance() } }
 }
 test('both stakes precede baseline; hidden Jev pick, fixed one-second horizon, winner gets exactly 2 USDV once', async () => {
   const h = harness(); await h.round.start()
@@ -78,8 +82,8 @@ test('unknown payout stays blocked without replacement; failed payout cannot ope
     assert.equal(h.round.phase, status === 'failed' ? 'blocked' : 'settling')
   }
 })
-test('missed pick, hidden tab, stale feed, delayed scheduling all fail closed without new stakes', async () => {
-  for (const abort of [(h: ReturnType<typeof harness>) => h.pulse(1100), (h: ReturnType<typeof harness>) => { h.hide(); h.round.advance() }, (h: ReturnType<typeof harness>) => h.pulse(800, 100, false), (h: ReturnType<typeof harness>) => h.jump(401)]) {
+test('missed pick, hidden tab, missing heartbeats, clock jumps fail closed without new stakes', async () => {
+  for (const abort of [(h: ReturnType<typeof harness>) => h.pulse(1100), (h: ReturnType<typeof harness>) => { h.hide(); h.round.advance() }, (h: ReturnType<typeof harness>) => h.pulse(MAX_AGE + 100, 100, false), (h: ReturnType<typeof harness>) => h.jump(401)]) {
     const h = harness(); await h.round.start(); abort(h); h.round.pick('up')
     assert.equal(h.round.phase, 'done'); assert.equal(h.ledger.transfers.length, 0)
   }
@@ -119,29 +123,74 @@ test('disconnect during pending stakes voids price round, but cannot cancel an e
   winner.prices.connected = false; winner.round.abort('disconnect'); winner.round.advance()
   assert.equal(winner.round.result, 'player'); assert.equal(winner.ledger.transfers.length, 3)
 })
-test('a newly received endpoint cannot erase a stale previous receipt gap', () => {
-  const baseline: Tick = { price: 100, time: 1_000_000, receivedAt: 1_000_000, tradeId: 1 }
-  const previous: Tick = { price: 100, time: 1_000_650, receivedAt: 1_000_400, tradeId: 2 }
-  const endpoint: Tick = { price: 101, time: 1_001_150, receivedAt: 1_001_160, tradeId: 3 }
-  // Source gap is only 500ms and end is inside +250ms tolerance, but receipts are 760ms apart.
-  assert.equal(endTick(baseline, previous, endpoint), 'invalid')
-  assert.equal(endTick(baseline, previous, { ...endpoint, receivedAt: 1_001_150 }), 'end')
+test('quiet market with 1s heartbeats, no new trades, and >400ms scheduling gaps is a genuine flat draw', async () => {
+  const h = harness(); await h.funded()
+  h.move(1000); h.heartbeat(); assert.equal(h.round.phase, 'watching')
+  const baseline = h.round.baseline!
+  h.move(1000); h.heartbeat()
+  assert.equal(h.round.end!.sourceTime, baseline.sourceTime + 1_000_000)
+  assert.equal(h.round.result, 'refund'); assert.match(h.round.reason, /^Price unchanged/)
+  h.round.payments.forEach(h.confirm); h.round.advance()
+  h.move(1000); h.heartbeat(); assert.equal(h.round.canStart, true)
 })
-test('source timestamp checks, monotonic dedup and bounded endpoint tolerance', () => {
-  const now = 1_000_000
-  const input = { type: 'ticker', product_id: 'BTC-USD', price: '64000.12', time: new Date(now + 80).toISOString(), trade_id: 1 }
-  assert.ok(parseTick(input, now)); assert.equal(parseTick({ ...input, time: new Date(now + 251).toISOString() }, now), null)
-  assert.equal(parseTick({ ...input, time: new Date(now - 751).toISOString() }, now), null)
-  assert.equal(parseTick({ ...input, price: 'NaN' }, now), null); assert.equal(parseTick({ ...input, product_id: 'ETH-USD' }, now), null)
-  const book = new PriceBook(); assert.ok(book.add(input, now)); assert.equal(book.add(input, now), null)
-  for (let i = 2; i < 100; i++) book.add({ ...input, trade_id: i, time: new Date(now + i * 100).toISOString() }, now + i * 100)
-  assert.equal(book.ticks.length, 32)
-  const t = (time: number): Tick => ({ time, receivedAt: time, price: 1, tradeId: time })
-  assert.equal(endTick(t(1000), t(1700), t(1999)), 'wait')
-  assert.equal(endTick(t(1000), t(1700), t(2000)), 'end')
-  assert.equal(endTick(t(1000), t(1700), t(2250)), 'end')
-  assert.equal(endTick(t(1000), t(1700), t(2251)), 'invalid')
-  assert.equal(endTick(t(1000), t(1000), t(2000)), 'invalid')
+test('move before cutoff pays correctly without endpoint trade; post-cutoff reversal is excluded', async () => {
+  const h = harness(); await h.funded(); h.move(100); h.heartbeat()
+  const baseline = h.round.baseline!
+  h.move(150); h.tick(101) // Only in-window price change, no endpoint tick.
+  h.move(851); h.tick(99) // 1ms after cutoff, more than 750ms since the last trade.
+  assert.equal(h.round.result, undefined); assert.equal(h.round.reason, 'Checking result…')
+  h.move(500); h.heartbeat()
+  assert.equal(h.round.result, 'player'); assert.equal(h.round.end!.price, 101)
+  assert.equal(h.round.end!.sourceTime, baseline.sourceTime + 1_000_000)
+})
+test('a trade after cutoff cannot turn a flat result into a win', async () => {
+  const h = harness(); await h.funded(); h.move(100); h.heartbeat()
+  h.move(1001); h.tick(101); h.move(500); h.heartbeat()
+  assert.equal(h.round.result, 'refund'); assert.match(h.round.reason, /^Price unchanged/)
+})
+test('same-ms trades are ordered and even a trade 1 microsecond after cutoff is excluded', async () => {
+  const h = harness(); await h.funded(); h.move(100); h.heartbeat()
+  h.move(1000)
+  const exact = new Date(h.now()).toISOString().replace('Z', '000Z')
+  h.tick(101, exact); h.tick(102, exact)
+  h.tick(99, `${exact.slice(0, -2)}1Z`)
+  h.move(1); h.heartbeat()
+  assert.equal(h.round.result, 'player'); assert.equal(h.round.end!.price, 102)
+})
+test('thousands of trades after cutoff cannot evict the retained outcome', async () => {
+  const h = harness(); await h.funded(); h.move(100); h.heartbeat()
+  h.move(900); h.tick(101); h.move(101)
+  for (let i = 0; i < 4000; i++) { h.tick(99); if (i % 100 === 0) h.move(1) }
+  h.heartbeat()
+  assert.ok(h.prices.ticks.length <= 32); assert.equal(h.round.result, 'player'); assert.equal(h.round.end!.price, 101)
+})
+test('missing trade ID, heartbeat coverage mismatch, or disconnect cannot settle a price result', async () => {
+  for (const interrupt of [
+    (h: ReturnType<typeof harness>) => h.frame({ type: 'match', trade_id: 100, price: '101' }),
+    (h: ReturnType<typeof harness>) => h.heartbeat(100),
+    (h: ReturnType<typeof harness>) => { h.prices.connected = false; h.round.advance() },
+  ]) {
+    const h = harness(); await h.funded(); h.move(100); h.heartbeat(); h.move(900); h.tick(101)
+    h.move(100); interrupt(h)
+    assert.equal(h.round.result, 'refund'); assert.equal(h.round.end, undefined)
+    assert.match(h.round.reason, /^Price feed interrupted/); assert.equal(h.round.payments.length, 2)
+  }
+})
+test('missing proof is bounded even while trades continue; a late heartbeat cannot change a refund', async () => {
+  const h = harness(); await h.funded(); h.move(100); h.heartbeat()
+  for (let elapsed = 0; elapsed < PROOF_WAIT + 1100; elapsed += 100) { h.move(100); h.tick(101); h.round.advance() }
+  assert.equal(h.round.result, 'refund'); assert.equal(h.round.end, undefined)
+  h.heartbeat(); assert.equal(h.round.payments.length, 2)
+})
+test('reconnect resync cannot silently continue the old round, but enables a new quiet-market round', async () => {
+  const h = harness(); await h.funded(); h.move(100); h.heartbeat()
+  h.prices.reset(); h.prices.connected = true; h.move(100)
+  h.frame({ type: 'last_match', price: '100', trade_id: 500 }); h.heartbeat(500)
+  assert.equal(h.round.result, 'refund'); assert.equal(h.round.end, undefined)
+  h.round.payments.forEach(h.confirm); h.move(1000); h.heartbeat(500); h.round.advance()
+  assert.equal(h.round.canStart, true)
+  await h.funded(); h.move(1000); h.heartbeat(500); h.move(1000); h.heartbeat(500)
+  assert.equal(h.round.result, 'refund'); assert.match(h.round.reason, /^Price unchanged/)
 })
 
 test('one direction tap starts inference and commits two stakes without a second click', async () => {

@@ -81,3 +81,25 @@ details p { font-size: 11px; line-height: 1.7; }
   .chart-empty { height: 130px; }
   .activity { margin-top: 24px; }
 }
+
+.loading-screen { max-width: 420px; margin: 8vh auto 0; padding-bottom: 28px; }
+.loading-symbol { color: var(--blue); width: 38px; height: 38px; display: grid; place-items: center; font-size: 35px; line-height: 1; margin-bottom: 24px; animation: idle-turn 5s linear infinite; }
+.loading-symbol.paused { animation: none; color: var(--muted); }
+.loading-screen h1 { font-size: 29px; letter-spacing: -.8px; line-height: 1.2; }
+.loading-detail { color: var(--muted); font-size: 13px; line-height: 1.6; min-height: 42px; margin: 13px 0 0; }
+.loading-timing { padding: 18px 0 24px; border-bottom: 1px solid var(--line); }
+.loading-timing > span { font-size: 14px; font-variant-numeric: tabular-nums; }
+.loading-timing small { display: block; margin-top: 5px; font-size: 11px; color: var(--muted); }
+.loading-steps { list-style: none; padding: 0; margin: 25px 0; }
+.loading-steps li { display: flex; align-items: center; gap: 13px; margin: 20px 0; color: #919aa7; font-size: 13px; }
+.step-marker { width: 25px; height: 25px; border: 1px solid var(--line); border-radius: 50%; display: grid; place-items: center; font-size: 10px; flex-shrink: 0; }
+.loading-steps small { display: block; font-size: 10px; margin-top: 4px; font-weight: 400; }
+.loading-steps [data-state="active"] { color: var(--blue); font-weight: 600; }
+.loading-steps [data-state="active"] .step-marker { border-color: var(--blue); background: #edf3ff; }
+.loading-steps [data-state="complete"] { color: #475264; }
+.loading-steps [data-state="complete"] .step-marker { border-color: transparent; background: #eef1f5; }
+.loading-footnote { font-size: 11px; line-height: 1.7; color: var(--muted); margin: 26px 0 0; }
+.loading-screen .setup-error { text-align: left; }
+@keyframes idle-turn { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .loading-symbol { animation: none; } }
+@media (max-width: 480px) { .loading-screen { margin-top: 6vh; } .loading-screen h1 { font-size: 26px; } }

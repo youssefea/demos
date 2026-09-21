@@ -1,5 +1,5 @@
 import { isPick, type Pick, type PredictionSnapshot } from '../../fighter-ai/src/prediction-contract.ts'
-import { endTick, END_TOLERANCE, MAX_AGE, PRICE_WINDOW, PriceBook, type Tick } from './price.ts'
+import { PRICE_WINDOW, PROOF_WAIT, PriceBook, type Tick } from './price.ts'
 import { Ledger, STAKE, unresolved, type Account, type Transfer } from './ledger.ts'
 export const ROUND_LIMIT = 20
 export type Phase = 'idle' | 'thinking' | 'picking' | 'funding' | 'baseline' | 'watching' | 'settling' | 'done' | 'blocked'
@@ -11,7 +11,7 @@ export class Round {
   inferenceMs?: number; result?: Result; reason = ''; deadline = 0
   baseline?: Tick; end?: Tick
   stakes: Transfer[] = []; payments: Transfer[] = []
-  private previous?: Tick; private baselineAfter = 0; private abortReason = ''
+  private candidate?: Tick; private baselineAfter = 0; private abortReason = ''; private generation = 0
   private controller?: AbortController; private lastPulse = 0; private lastWall = 0
   private net: Network; private prices: PriceBook; private infer: Inference
   private now: () => number; private mono: () => number; private visible: () => boolean
@@ -27,7 +27,8 @@ export class Round {
   async start(choice?: Pick) {
     if (!this.canStart || (choice !== undefined && !isPick(choice))) return
     this.number++; this.phase = 'thinking'; this.reason = 'Jev is making an independent prediction…'
-    this.player = undefined; this.decision = undefined; this.baseline = undefined; this.end = undefined; this.previous = undefined
+    this.player = undefined; this.decision = undefined; this.baseline = undefined; this.end = undefined; this.candidate = undefined
+    this.generation = this.prices.generation
     this.result = undefined; this.abortReason = ''; this.stakes = []; this.payments = []; this.inferenceMs = undefined
     this.lastPulse = this.mono(); this.lastWall = this.now()
     const controller = new AbortController(); this.controller = controller
@@ -63,22 +64,25 @@ export class Round {
       this.settle('refund', this.abortReason || 'A stake failed. Refunding confirmed contributions only.')
     } else if (this.player === this.decision) this.settle('refund', 'Same prediction. Both stakes are returned.')
     else {
-      this.phase = 'baseline'; this.baselineAfter = this.now(); this.deadline = this.now() + 2_000
-      this.reason = 'Stakes confirmed. Waiting for a new baseline trade…'
+      this.phase = 'baseline'; this.baselineAfter = this.now(); this.deadline = this.now() + PROOF_WAIT
+      this.reason = 'Stakes confirmed. Waiting for a verified starting price…'
     }
   }
   onTick(tick: Tick) {
     this.advance()
-    if (this.phase === 'baseline' && tick.receivedAt >= this.baselineAfter && tick.time >= this.baselineAfter) {
-      this.baseline = tick; this.previous = tick; this.phase = 'watching'; this.deadline = tick.time + PRICE_WINDOW
+    if (this.phase === 'baseline' && tick.kind === 'heartbeat' && tick.receivedAt >= this.baselineAfter && tick.sourceTime >= this.baselineAfter * 1_000) {
+      this.baseline = tick; this.candidate = tick; this.phase = 'watching'; this.deadline = tick.sourceTime / 1_000 + PRICE_WINDOW
       this.reason = 'One-second price window is live.'
-    } else if (this.phase === 'watching' && this.baseline && this.previous) {
-      const status = endTick(this.baseline, this.previous, tick)
-      this.previous = tick
-      if (status === 'invalid') this.abort('Price gap or late endpoint. Returning both stakes.')
-      else if (status === 'end') {
-        this.end = tick
-        const direction = tick.price > this.baseline.price ? 'up' : tick.price < this.baseline.price ? 'down' : null
+    } else if (this.phase === 'watching' && this.baseline && this.candidate) {
+      const cutoff = this.baseline.sourceTime + PRICE_WINDOW * 1_000
+      // Constant memory: retain the last actual trade at/before the cutoff, even if
+      // thousands of later trades evict it from the bounded chart/model history.
+      if (tick.kind === 'trade' && tick.sourceTime <= cutoff) this.candidate = tick
+      if (tick.kind === 'heartbeat' && tick.sourceTime >= cutoff) {
+        // PriceBook only emits a heartbeat after checking contiguous trade-ID coverage.
+        // Its current price might be AFTER cutoff; never use that as the end price.
+        this.end = { ...this.candidate, time: Math.floor(cutoff / 1_000), sourceTime: cutoff, receivedAt: tick.receivedAt }
+        const direction = this.end.price > this.baseline.price ? 'up' : this.end.price < this.baseline.price ? 'down' : null
         const winner = direction === null ? 'refund' : direction === this.player ? 'player' : 'jev'
         this.settle(winner, direction === null ? 'Price unchanged. Both stakes are returned.' : `${winner === 'player' ? 'You win' : 'Jev wins'} the price prediction. Confirming payout…`)
       }
@@ -88,15 +92,16 @@ export class Round {
     const now = this.now(), mono = this.mono()
     if (this.active && this.phase !== 'settling') {
       if (!this.visible()) this.abort('Tab hidden. Returning confirmed stakes.')
-      else if (mono - this.lastPulse > 400 || Math.abs((now - this.lastWall) - (mono - this.lastPulse)) > 250) this.abort('Timer delayed or clock changed. Returning confirmed stakes.')
-      else if (!this.prices.fresh(now)) this.abort('Price feed stale or disconnected. Returning confirmed stakes.')
+      else if (Math.abs((now - this.lastWall) - (mono - this.lastPulse)) > 250) this.abort('Clock changed. Returning confirmed stakes.')
+      else if (this.prices.generation !== this.generation || !this.prices.fresh(now)) this.abort('Price feed interrupted. Returning confirmed stakes.')
       else if (this.net.blocked) this.abort('Network unavailable. Returning confirmed stakes when safe.')
     }
     this.lastPulse = mono; this.lastWall = now
     if (this.phase === 'picking' && now >= this.deadline) this.abort('No pick within one second. No stakes submitted.')
     if (this.phase === 'funding') this.finishFunding()
-    if (this.phase === 'baseline' && now > this.deadline) this.abort('No fresh baseline trade. Returning both stakes.')
-    if (this.phase === 'watching' && now > this.deadline + END_TOLERANCE + MAX_AGE) this.abort('No qualifying endpoint trade. Returning both stakes.')
+    if (this.phase === 'baseline' && now > this.deadline) this.abort('Price feed proof timed out before the starting price. Returning both stakes.')
+    if (this.phase === 'watching' && now > this.deadline + PROOF_WAIT) this.abort('Price feed proof timed out at the cutoff. Returning both stakes.')
+    if (this.phase === 'watching' && now >= this.deadline) this.reason = 'Checking result…'
     if (this.phase === 'settling' && this.payments.every(tx => !unresolved(tx))) {
       if (this.payments.some(tx => tx.status === 'failed')) { this.phase = 'blocked'; this.reason = 'A settlement transfer failed. Funds may remain in the pot; new rounds are blocked. Do not reload.' }
       else { this.phase = 'done'; this.reason = this.result === 'refund' ? `${this.reason} Refunds confirmed.` : `${this.result === 'player' ? 'You won' : 'Jev won'} 1.00 test USDV net. Payout confirmed.` }

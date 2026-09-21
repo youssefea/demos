@@ -7,6 +7,9 @@ import { Setup, type Runtime } from './setup.ts'
 import { Round, ROUND_LIMIT } from './round.ts'
 import { infer } from './jev.ts'
 import type { Pick } from '../../fighter-ai/src/prediction-contract.ts'
+import LoadingScreen from './LoadingScreen.tsx'
+import { initialProgress, type SetupProgress } from './loading.ts'
+import { refundSummary } from './refund-summary.ts'
 
 const usd = (n?: number) => n === undefined ? '—' : n.toLocaleString('en-US', { style: 'currency', currency: 'USD' })
 const name = (side: Account) => side === 'player' ? 'You' : side === 'jev' ? 'Jev' : 'Pot'
@@ -37,16 +40,16 @@ function status(round: Round | null, live: boolean, blocked?: string | null) {
   if (round.phase === 'thinking') return 'Jev is picking…'
   if (round.phase === 'funding') return 'Locking $1 each…'
   if (round.phase === 'baseline') return 'Getting the starting price…'
-  if (round.phase === 'watching') return 'Watching the next second…'
+  if (round.phase === 'watching') return Date.now() >= round.deadline ? 'Checking result…' : 'Watching the next second…'
   if (round.phase === 'settling') return round.result === 'refund' ? 'Returning both stakes…' : 'Sending the winnings…'
   if (round.number >= ROUND_LIMIT) return 'Session complete.'
-  if (blocked) return 'Waiting for Vibenet…'
-  if (!live) return 'Waiting for a fresh price…'
   if (round.phase === 'done') {
     if (!round.stakes.length) return 'No bet placed. Try again.'
-    if (round.result === 'refund') return 'Refunded. Go again.'
+    if (round.result === 'refund') return refundSummary(round.reason, round.player)
     return round.result === 'player' ? 'You won $1. Go again.' : 'Jev won $1. Go again.'
   }
+  if (blocked) return 'Waiting for Vibenet…'
+  if (!live) return 'Waiting for a fresh price…'
   return 'Where does Bitcoin go next?'
 }
 
@@ -56,25 +59,33 @@ export default function App() {
   const prices = useRef(new PriceBook()).current, setup = useRef(new Setup()).current
   const setupTask = useRef<Promise<Runtime> | null>(null)
   const network = useRef<PredictionNetwork | null>(null), round = useRef<Round | null>(null)
-  const [attempt, setAttempt] = useState(0), [progress, setProgress] = useState('Preparing your test wallets…')
+  const [attempt, setAttempt] = useState(0), [progress, setProgress] = useState(initialProgress)
+  const progressListener = useRef<(label: string, stage?: SetupProgress) => void>(() => {})
   const [error, setError] = useState(''), [selected, setSelected] = useState<Pick>()
   useEffect(() => {
     let disposed = false
     const update = () => { if (!disposed) refresh() }
-    const disconnect = connectPrices(prices, tick => { round.current?.onTick(tick); update() }, () => { round.current?.advance(); update() })
-    const timer = setInterval(() => { round.current?.advance(); update() }, 50)
+    let disconnect: (() => void) | undefined
+    let timer: ReturnType<typeof setInterval> | undefined
     const hide = () => { if (document.hidden) round.current?.abort('Tab hidden. Returning confirmed stakes.'); update() }
     const leaving = (event: BeforeUnloadEvent) => { if (round.current?.unsettled) { event.preventDefault(); event.returnValue = '' } }
     document.addEventListener('visibilitychange', hide)
     window.addEventListener('beforeunload', leaving)
     setError('')
+    setProgress(initialProgress())
+    progressListener.current = (label, stage) => {
+      if (!disposed) setProgress(previous => stage ?? { ...previous, detail: label })
+    }
     // Reuse the same setup promise/accounts across React effect replay; never double-fund on mount.
-    setupTask.current ??= setup.run(label => { if (!disposed) setProgress(label) })
+    setupTask.current ??= setup.run((label, stage) => progressListener.current(label, stage))
     void setupTask.current.then(runtime => {
       if (disposed) return
       const net = new PredictionNetwork(runtime, update)
       network.current = net
       round.current = new Round(net, prices, infer)
+      // No market subscription or game loop until wallet funding/deployment has succeeded.
+      disconnect = connectPrices(prices, tick => { round.current?.onTick(tick); update() }, () => { round.current?.advance(); update() })
+      timer = setInterval(() => { round.current?.advance(); update() }, 50)
       update()
     }).catch(e => {
       if (disposed) return
@@ -83,7 +94,8 @@ export default function App() {
     })
     return () => {
       disposed = true
-      disconnect(); clearInterval(timer)
+      progressListener.current = () => {}
+      disconnect?.(); clearInterval(timer)
       document.removeEventListener('visibilitychange', hide)
       window.removeEventListener('beforeunload', leaving)
       round.current?.abort('Page closed'); network.current?.close()
@@ -92,6 +104,7 @@ export default function App() {
   }, [prices, setup, attempt])
 
   const r = round.current, n = network.current, live = prices.fresh(Date.now())
+  if (!n || !r) return <LoadingScreen progress={progress} error={error} retry={() => setAttempt(a => a + 1)} />
   const watching = r?.phase === 'watching'
   const remaining = watching ? Math.max(0, r.deadline - Date.now()) / 1000 : 1
   const transfers = [...(n?.ledger.transfers ?? [])].reverse()
@@ -119,18 +132,18 @@ export default function App() {
           <button className={`pick ${r?.active && selected === 'up' ? 'selected' : ''}`} aria-label="Up" disabled={!canPick} onClick={() => place('up')}>↑ Up</button>
           <button className={`pick ${r?.active && selected === 'down' ? 'selected' : ''}`} aria-label="Down" disabled={!canPick} onClick={() => place('down')}>↓ Down</button>
         </div>
-        <p className="status" role="status">{error ? 'Wallet setup paused.' : unresolved && n?.ledger.pending.some(tx => tx.status === 'unknown') ? 'Checking a pending transfer. Keep this tab open.' : status(r, live, n?.blocked)}</p>
-        {!n && !error && <p className="setup-note">Free test coins are on their way. First visit takes about a minute.</p>}
-        {error && <div className="setup-error"><p role="alert">{error}</p><button onClick={() => setAttempt(a => a + 1)}>Retry</button></div>}
-        {r?.active && <p className="round-picks">You {pickName(selected)} <span>·</span> Jev {r.jev ? pickName(r.jev) : '…'}</p>}
+        <p className="status" role="status">{unresolved && n.ledger.pending.some(tx => tx.status === 'unknown') ? 'Checking a pending transfer. Keep this tab open.' : status(r, live, n.blocked)}</p>
+        {(r.active || r.player) && <p className="round-picks">You {pickName(r.player ?? selected)} <span>·</span> Jev {r.jev ? pickName(r.jev) : '…'}{r.jev && r.inferenceMs !== undefined ? ` · ${r.inferenceMs} ms AI` : ''}</p>}
         {r && !r.active && r.number >= ROUND_LIMIT && !r.unsettled && <button className="text-button" onClick={() => window.location.reload()}>Get fresh test coins</button>}
       </section>
       {transfers.length > 0 && <section className="activity" aria-label="Recent transactions"><div className="activity-heading"><span>Onchain</span><span>{transfers.filter(tx => tx.status === 'confirmed').length} confirmed</span></div>{transfers.slice(0, 3).map(tx => <Tx key={tx.id} tx={tx} />)}</section>}
       <footer><span>Win $1. Ties refunded. No real money.</span><details>
         <summary>Details</summary>
-        <p>Both accounts stake 1 test USDV. Opposite picks compete on the next 1.00–1.25s of Coinbase BTC trades, after both stakes confirm. Matching picks, flat prices and stale data refund the stakes. Chain settlement takes additional time.</p>
+        <p>Both accounts stake 1 test USDV. After both stakes confirm, opposite picks compete on exactly one second of Coinbase BTC prices. The last trade at or before the cutoff decides; a verified exchange heartbeat confirms the result, even if no new trade occurs. Matching picks and flat prices refund. Missing feed data also refunds. Verification and chain settlement take additional time.</p>
         <p>All three wallets are controlled by this browser. Jev predicts independently; it never receives your choice. This is not trustless escrow. Never send real funds. Keep the tab open during settlement; reloading loses disposable keys.</p>
-        {!n ? <p>{progress}</p> : <><p>{r?.number ?? 0}/{ROUND_LIMIT} rounds · Pot: <span data-testid="pot-balance">{formatUnits(n.ledger.balances.pot)}</span> USDV · {n.state} · Block {n.head}</p>{(['player', 'jev', 'pot'] as const).map(side => <a className="account-link" key={side} href={`${EXPLORER_URL}/address/${n.runtime.accounts[side].account.address}`} target="_blank" rel="noreferrer">{name(side)}: {n.runtime.accounts[side].account.address}</a>)}<p>{r?.reason}</p>{n.error && <p>{n.error}</p>}<button onClick={() => n.recheck()}>Recheck transfers</button></>}
+        <p>{r.number}/{ROUND_LIMIT} rounds · Pot: <span data-testid="pot-balance">{formatUnits(n.ledger.balances.pot)}</span> USDV · {n.state} · Block {n.head}</p>
+        {(['player', 'jev', 'pot'] as const).map(side => <a className="account-link" key={side} href={`${EXPLORER_URL}/address/${n.runtime.accounts[side].account.address}`} target="_blank" rel="noreferrer">{name(side)}: {n.runtime.accounts[side].account.address}</a>)}
+        <p>{r.reason}</p>{n.error && <p>{n.error}</p>}<button onClick={() => n.recheck()}>Recheck transfers</button>
         {transfers.length > 0 && <div className="history">{transfers.map(tx => <Tx key={tx.id} tx={tx} />)}</div>}
       </details></footer>
     </main>

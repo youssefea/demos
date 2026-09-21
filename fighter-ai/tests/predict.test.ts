@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { createPredictionHandler, predictionQuestions } from '../src/predict.ts'
-import { isPredictionSnapshot, PREDICTION_MODEL } from '../src/prediction-contract.ts'
+import { isPredictionSnapshot, OBSERVATION_MAX_AGE, PREDICTION_MODEL } from '../src/prediction-contract.ts'
 import { RateLimit } from '../src/handler.ts'
 const snapshot = (now = Date.now()) => ({ version: 1, ticks: [{ price: 65000.01, time: now - 300 }, { price: 65000.02, time: now }] })
 const post = (body: unknown = snapshot()): RequestInit => ({ method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://youssefea.github.io' }, body: JSON.stringify(body) })
@@ -16,8 +16,15 @@ async function serve(handler: ReturnType<typeof createPredictionHandler>, run: (
 test('bounded price-only schema rejects picks, text, stale/unordered/future ticks and excessive history', () => {
   const now = Date.now(), valid = snapshot(now)
   assert.equal(isPredictionSnapshot(valid, now), true)
-  for (const bad of [null, {}, { ...valid, pick: 'up' }, { ...valid, address: '0x123' }, { ...valid, ticks: [] }, { ...valid, ticks: Array(33).fill(valid.ticks[0]) }, { ...valid, ticks: [valid.ticks[1], valid.ticks[0]] }, snapshot(now - 1001), snapshot(now + 251), { ...valid, ticks: [{ price: NaN, time: now - 500 }, valid.ticks[1]] }, { ...valid, ticks: [{ price: 1, time: now - 31_000 }, valid.ticks[1]] }, { ...valid, ticks: [{ ...valid.ticks[0], prompt: 'up' }, valid.ticks[1]] }]) assert.equal(isPredictionSnapshot(bad, now), false)
+  for (const bad of [null, {}, { ...valid, pick: 'up' }, { ...valid, address: '0x123' }, { ...valid, ticks: [] }, { ...valid, ticks: Array(33).fill(valid.ticks[0]) }, { ...valid, ticks: [valid.ticks[1], valid.ticks[0]] }, snapshot(now - OBSERVATION_MAX_AGE - 1), snapshot(now + 251), { ...valid, ticks: [{ price: NaN, time: now - 500 }, valid.ticks[1]] }, { ...valid, ticks: [{ price: 1, time: now - 31_000 }, valid.ticks[1]] }, { ...valid, ticks: [{ ...valid.ticks[0], prompt: 'up' }, valid.ticks[1]] }]) assert.equal(isPredictionSnapshot(bad, now), false)
   assert.deepEqual(Object.keys(predictionQuestions.direction.criteria), ['up', 'down'])
+})
+test('heartbeat-confirmed carry-forward observations are valid without inventing a new trade', () => {
+  const now = Date.now()
+  const quiet = { version: 1, ticks: [{ price: 65000, time: now - 2000 }, { price: 65000, time: now - 1001 }] }
+  assert.equal(isPredictionSnapshot(quiet, now), true)
+  assert.equal(isPredictionSnapshot(snapshot(now - OBSERVATION_MAX_AGE), now), true)
+  assert.match(predictionQuestions.direction.instructions, /heartbeats carrying forward the actual last-trade price/)
 })
 test('actual adapter contract, model and allowed CORS are exact; input has no human pick', async () => {
   await serve(createPredictionHandler(async state => { assert.deepEqual(Object.keys(state).sort(), ['ticks', 'version']); return 'up' }), async url => {

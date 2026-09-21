@@ -6,7 +6,7 @@ import { isPick, isPredictionSnapshot, PREDICTION_MODEL, type PredictionSnapshot
 export const predictionQuestions = {
   direction: {
     type: 'choice',
-    instructions: 'You are Jev in a test-money Bitcoin direction prediction demo. Given recent Coinbase BTC-USD trade prices with exchange timestamps in milliseconds, independently predict up or down over an upcoming one-second price window. The window starts after both test stakes confirm, not at the last supplied tick. You do not know the human choice. Choose only up or down. This is a noisy short horizon, not financial advice.',
+    instructions: 'You are Jev in a test-money Bitcoin direction prediction demo. Given recent Coinbase BTC-USD last-trade price observations with exchange timestamps in milliseconds, independently predict up or down over an upcoming one-second price window. Observations include coverage-verified heartbeats carrying forward the actual last-trade price; repeated values need not mean new trades. The window starts after both test stakes confirm, not at the last supplied tick. You do not know the human choice. Choose only up or down. This is a noisy short horizon, not financial advice.',
     criteria: { up: 'The end price will be higher than the start price.', down: 'The end price will be lower than the start price.' },
   },
 } as const
