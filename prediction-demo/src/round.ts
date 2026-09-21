@@ -24,8 +24,8 @@ export class Round {
   get canStart() {
     return !this.unsettled && this.number < ROUND_LIMIT && !this.net.blocked && this.visible() && this.prices.fresh(this.now()) && this.prices.snapshot(this.now()).ticks.length >= 2 && this.net.ledger.balances.player >= STAKE && this.net.ledger.balances.jev >= STAKE
   }
-  async start() {
-    if (!this.canStart) return
+  async start(choice?: Pick) {
+    if (!this.canStart || (choice !== undefined && !isPick(choice))) return
     this.number++; this.phase = 'thinking'; this.reason = 'Jev is making an independent prediction…'
     this.player = undefined; this.decision = undefined; this.baseline = undefined; this.end = undefined; this.previous = undefined
     this.result = undefined; this.abortReason = ''; this.stakes = []; this.payments = []; this.inferenceMs = undefined
@@ -40,6 +40,8 @@ export class Round {
       if (!isPick(answer.pick) || !Number.isFinite(answer.inferenceMs) || answer.inferenceMs < 0) throw new Error('Invalid Jev answer')
       this.decision = answer.pick; this.inferenceMs = answer.inferenceMs
       this.phase = 'picking'; this.deadline = this.now() + 1_000; this.reason = 'Your turn. Pick within one second.'
+      // A direction tap starts and commits the round. The choice never enters Jev's input.
+      if (choice !== undefined) this.pick(choice)
     } catch { if (this.controller === controller && this.phase === 'thinking') this.abort('Jev unavailable. No stakes submitted. Try another round.') }
     finally { clearTimeout(timer); if (this.controller === controller && this.phase === 'thinking') this.abort('Jev timed out. No stakes submitted.') }
   }

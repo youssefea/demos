@@ -143,3 +143,37 @@ test('source timestamp checks, monotonic dedup and bounded endpoint tolerance', 
   assert.equal(endTick(t(1000), t(1700), t(2251)), 'invalid')
   assert.equal(endTick(t(1000), t(1000), t(2000)), 'invalid')
 })
+
+test('one direction tap starts inference and commits two stakes without a second click', async () => {
+  let input: unknown, resolve!: (answer: { pick: 'up' | 'down'; inferenceMs: number }) => void
+  const h = harness(snapshot => { input = snapshot; return new Promise(r => { resolve = r }) })
+  const first = h.round.start('up')
+  await h.round.start('down') // A repeated tap cannot change the choice or start a second bet.
+  assert.equal(h.round.phase, 'thinking'); assert.equal(h.round.number, 1)
+  assert.equal(h.ledger.transfers.length, 0)
+  assert.deepEqual(Object.keys(input as object).sort(), ['ticks', 'version'])
+  resolve({ pick: 'down', inferenceMs: 100 }); await first
+  assert.equal(h.round.player, 'up'); assert.equal(h.round.jev, 'down')
+  assert.equal(h.round.phase, 'funding'); assert.equal(h.ledger.transfers.length, 2)
+})
+
+test('direction taps fail closed on provider outage or visibility loss before inference returns', async () => {
+  const outage = harness(async () => { throw new Error('offline') })
+  await outage.round.start('up')
+  assert.equal(outage.ledger.transfers.length, 0); assert.equal(outage.round.phase, 'done')
+  let resolve!: (answer: { pick: 'up' | 'down'; inferenceMs: number }) => void
+  const hidden = harness(() => new Promise(r => { resolve = r }))
+  const pending = hidden.round.start('down'); hidden.hide()
+  resolve({ pick: 'up', inferenceMs: 100 }); await pending
+  assert.equal(hidden.ledger.transfers.length, 0); assert.equal(hidden.round.phase, 'done')
+})
+
+test('settlement re-enables the next direction tap, but never places another bet by itself', async () => {
+  const h = harness(); await h.round.start('down')
+  h.round.stakes.forEach(h.confirm); h.round.advance()
+  h.round.payments.forEach(h.confirm); h.round.advance()
+  assert.equal(h.round.canStart, true); const count = h.ledger.transfers.length
+  h.pulse(2000); assert.equal(h.ledger.transfers.length, count); assert.equal(h.round.number, 1)
+  await h.round.start('up'); assert.equal(h.round.number, 2)
+  assert.equal(h.ledger.transfers.length, count + 2)
+})
