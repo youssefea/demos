@@ -2,11 +2,11 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { estimateLabel, fundingEstimate, SETUP_STEPS, type SetupProgress } from '../src/loading.ts'
 
-test('remaining funding estimate uses the advertised faucet cooldown and unfinished work', () => {
-  assert.equal(fundingEstimate(5, 10), 77)
-  assert.ok(fundingEstimate(4, 10) < fundingEstimate(5, 10))
-  assert.ok(fundingEstimate(5, 20) > fundingEstimate(5, 10))
-  assert.ok(Number.isFinite(fundingEstimate(5, NaN)))
+test('three-check funding estimate uses the advertised faucet cooldown and unfinished work', () => {
+  assert.equal(fundingEstimate(3, 10), 51)
+  assert.ok(fundingEstimate(2, 10) < fundingEstimate(3, 10))
+  assert.ok(fundingEstimate(3, 20) > fundingEstimate(3, 10))
+  assert.ok(Number.isFinite(fundingEstimate(3, NaN)))
   assert.equal(fundingEstimate(0, 10), 12)
 })
 test('ETA counts down as an estimate, never claims zero seconds or completion', () => {

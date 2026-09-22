@@ -1,8 +1,8 @@
 export const SETUP_STEPS = [
   { id: 'connect', title: 'Waking up Vibenet', description: 'Checking the network and test contracts.' },
   { id: 'accounts', title: 'Setting up your account', description: 'Creating wallets for you, Jev and the pot.' },
-  { id: 'funding', title: 'Making you test-rich', description: 'Getting test gas and play money from the faucet.' },
-  { id: 'deploy', title: 'Onchaining the squad', description: 'Deploying the wallets and confirming their transactions.' },
+  { id: 'funding', title: 'Making you test-rich', description: 'Getting one gas drip and two play-money drips from the faucet.' },
+  { id: 'deploy', title: 'Onchaining the squad', description: 'Deploying the wallets, sharing gas, and confirming every transaction.' },
   { id: 'verify', title: 'Counting the pretend money', description: 'Checking balances before we let you loose.' },
 ] as const
 export type SetupPhase = typeof SETUP_STEPS[number]['id']
