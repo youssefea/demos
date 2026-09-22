@@ -50,7 +50,7 @@ test('source precision, bounded future skew, malformed values and heartbeat fres
   const input = trade(1, now + 80)
   assert.ok(parseTick(input, now))
   assert.equal(parseTick({ ...input, time: '2026-09-21T23:12:24.080001Z' }, now)!.sourceTime, now * 1000 + 80_001)
-  for (const bad of [{ ...input, price: 'NaN' }, { ...input, price: '0' }, { ...input, price: '1e5' }, { ...input, trade_id: 1.5 }, { ...input, time: 'invalid' }, { ...input, time: new Date(now + 251).toISOString() }, { ...input, product_id: 'ETH-USD' }, { ...input, type: 'ticker' }]) assert.equal(parseTick(bad, now), null)
+  for (const bad of [{ ...input, price: 'NaN' }, { ...input, price: '0' }, { ...input, price: '1e5' }, { ...input, trade_id: 1.5 }, { ...input, time: 'invalid' }, { ...input, time: new Date(now + 2001).toISOString() }, { ...input, product_id: 'ETH-USD' }, { ...input, type: 'ticker' }]) assert.equal(parseTick(bad, now), null)
   const book = new PriceBook(); book.connected = true
   book.add(trade(1, now - 10_000, '100', 'last_match'), now)
   assert.equal(book.add(heartbeat(1, now - MAX_AGE - 1), now), null)

@@ -16,7 +16,7 @@ async function serve(handler: ReturnType<typeof createPredictionHandler>, run: (
 test('bounded price-only schema rejects picks, text, stale/unordered/future ticks and excessive history', () => {
   const now = Date.now(), valid = snapshot(now)
   assert.equal(isPredictionSnapshot(valid, now), true)
-  for (const bad of [null, {}, { ...valid, pick: 'up' }, { ...valid, address: '0x123' }, { ...valid, ticks: [] }, { ...valid, ticks: Array(33).fill(valid.ticks[0]) }, { ...valid, ticks: [valid.ticks[1], valid.ticks[0]] }, snapshot(now - OBSERVATION_MAX_AGE - 1), snapshot(now + 251), { ...valid, ticks: [{ price: NaN, time: now - 500 }, valid.ticks[1]] }, { ...valid, ticks: [{ price: 1, time: now - 31_000 }, valid.ticks[1]] }, { ...valid, ticks: [{ ...valid.ticks[0], prompt: 'up' }, valid.ticks[1]] }]) assert.equal(isPredictionSnapshot(bad, now), false)
+  for (const bad of [null, {}, { ...valid, pick: 'up' }, { ...valid, address: '0x123' }, { ...valid, ticks: [] }, { ...valid, ticks: Array(33).fill(valid.ticks[0]) }, { ...valid, ticks: [valid.ticks[1], valid.ticks[0]] }, snapshot(now - OBSERVATION_MAX_AGE - 1), snapshot(now + 2001), { ...valid, ticks: [{ price: NaN, time: now - 500 }, valid.ticks[1]] }, { ...valid, ticks: [{ price: 1, time: now - 31_000 }, valid.ticks[1]] }, { ...valid, ticks: [{ ...valid.ticks[0], prompt: 'up' }, valid.ticks[1]] }]) assert.equal(isPredictionSnapshot(bad, now), false)
   assert.deepEqual(Object.keys(predictionQuestions.direction.criteria), ['up', 'down'])
 })
 test('heartbeat-confirmed carry-forward observations are valid without inventing a new trade', () => {
@@ -61,4 +61,14 @@ test('timeout cancels model, invalid response/provider failure never fabricate a
 test('rate limit refuses inference', async () => {
   class Deny extends RateLimit { override take() { return false } }
   await serve(createPredictionHandler(async () => { throw new Error('must not call') }, new Deny()), async url => assert.equal((await fetch(url, post())).status, 429))
+})
+
+test('prediction endpoint accepts bounded exchange-clock lead without leaking the human pick', async () => {
+  await serve(createPredictionHandler(async state => {
+    assert.deepEqual(Object.keys(state).sort(), ['ticks', 'version'])
+    return 'up'
+  }), async url => {
+    for (const lead of [260, 2000]) assert.equal((await fetch(url, post(snapshot(Date.now() + lead)))).status, 200)
+    assert.equal((await fetch(url, post(snapshot(Date.now() + 10000)))).status, 400)
+  })
 })

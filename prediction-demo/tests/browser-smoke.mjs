@@ -36,7 +36,7 @@ try {
       let id = 0, lastPrice, lastHeartbeat = 0
       ws.onMessage(message => assert.deepEqual(JSON.parse(String(message)).channels, ['matches', 'heartbeat']))
       const timer = setInterval(() => {
-        const now = Date.now()
+        const now = Date.now() + 260 // Reproduce the real exchange clock lead that previously caused reconnect loops.
         // Only genuine price changes generate trades: quiet periods keep the feed live via heartbeat.
         if (price !== lastPrice) {
           ws.send(JSON.stringify({ type: id ? 'match' : 'last_match', product_id: 'BTC-USD', time: new Date(id ? now : now - 60_000).toISOString(), price: String(price), trade_id: ++id }))

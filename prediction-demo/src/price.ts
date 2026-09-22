@@ -1,8 +1,8 @@
-import { OBSERVATION_MAX_AGE, type PricePoint } from '../../fighter-ai/src/prediction-contract.ts'
+import { OBSERVATION_FUTURE_SKEW, OBSERVATION_MAX_AGE, type PricePoint } from '../../fighter-ai/src/prediction-contract.ts'
 /** time is the millisecond observation time; sourceTime preserves exchange microseconds. */
 export type Tick = PricePoint & { sourceTime: number; receivedAt: number; tradeId: number; kind: 'trade' | 'heartbeat' }
 export const MAX_AGE = OBSERVATION_MAX_AGE
-export const FUTURE_SKEW = 250
+export const FUTURE_SKEW = OBSERVATION_FUTURE_SKEW
 export const PRICE_WINDOW = 1_000
 export const PROOF_WAIT = 4_000
 

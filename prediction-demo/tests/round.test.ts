@@ -226,3 +226,20 @@ test('settlement re-enables the next direction tap, but never places another bet
   await h.round.start('up'); assert.equal(h.round.number, 2)
   assert.equal(h.ledger.transfers.length, count + 2)
 })
+
+test('bounded exchange clock lead preserves the exact one-second cutoff and excludes later reversals', async () => {
+  for (const skew of [260, 2000]) {
+    const h = harness(); await h.funded()
+    const sourceStart = h.now() + skew
+    h.heartbeat(undefined, new Date(sourceStart).toISOString())
+    assert.equal(h.round.phase, 'watching')
+    h.move(750); h.tick(101, new Date(sourceStart + 750).toISOString())
+    h.move(251); h.tick(99, new Date(sourceStart + 1001).toISOString())
+    assert.equal(h.round.end, undefined)
+    h.move(999); h.heartbeat(undefined, new Date(sourceStart + 2000).toISOString())
+    assert.equal(h.round.end!.sourceTime - h.round.baseline!.sourceTime, 1_000_000)
+    assert.equal(h.round.result, 'player', 'trade after the exchange cutoff cannot reverse the winner')
+    assert.equal(h.round.payments.length, 1)
+    assert.equal(h.round.payments[0].amount, 2n * STAKE)
+  }
+})
